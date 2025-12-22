@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Kids Wheel Game</title>
+<script src="https://cdn.jsdelivr.net/npm/phaser@3/dist/phaser.js"></script>
+
+<style>
+:root {
+  --bg:#f6f8fb;
+  --card:#fff;
+  --accent:#6b46ff;
+  --muted:#6b7280;
+}
+body{
+  margin:0;
+  font-family:system-ui;
+  background:var(--bg);
+  height:100vh;
+}
+.app{
+  display:flex;
+  gap:24px;
+  padding:24px;
+  height:100%;
+  box-sizing:border-box;
+}
+.panel{
+  width:340px;
+  background:var(--card);
+  border-radius:20px;
+  padding:20px;
+  box-shadow:0 20px 60px rgba(0,0,0,.08);
+  display:flex;
+  flex-direction:column;
+}
+.panel h2{
+  margin:0 0 6px;
+  font-size:20px;
+  font-weight:900;
+}
+.panel p{
+  margin:0 0 12px;
+  font-size:14px;
+  color:var(--muted);
+}
+textarea{
+  width:100%;
+  height:180px;
+  padding:12px;
+  border-radius:14px;
+  border:1px solid #e5e7eb;
+  resize:none;
+}
+button{
+  margin-top:10px;
+  padding:12px;
+  border-radius:14px;
+  border:none;
+  font-weight:900;
+  cursor:pointer;
+  background:linear-gradient(135deg,var(--accent),#b86bff);
+  color:#fff;
+}
+.result{
+  margin-top:auto;
+  padding:16px;
+  border-radius:14px;
+  background:#eef2ff;
+  font-size:20px;
+  font-weight:900;
+  text-align:center;
+  color:var(--accent);
+}
+.game{
+  flex:1;
+  display:flex;
+  align-items:flex-start;
+  justify-content:center;
+  height:auto;
+  min-height:0;
+  margin-bottom:0;
+  padding-bottom:0;
+}
+</style>
+</head>
+
+<body>
+
+<div class="app">
+
+  <div class="panel">
+    <h2>Wheel Items</h2>
+    <p>Label | Weight</p>
+
+<textarea id="input">
++1 Point | 5
++2 Points | 3
+Lose Turn | 1
+Bonus | 2
+Coconut | 1
+</textarea>
+
+<button onclick="updateWheel()">Update Wheel</button>
+
+<div class="result" id="result">Spin the wheel!</div>
+  </div>
+
+  <div class="game" id="game"></div>
+</div>
+
+<script>
+let sceneRef, wheel, segments=[], sliceAngle;
+let spinning=false;
+let tickSound=null;
+let lastTickIndex=null;
+
+const config={
+  type:Phaser.AUTO,
+  width:700,
+  height:590,
+  backgroundColor:"#f6f8fb",
+  parent:"game",
+  scene:{create},
+  scale: {
+    mode: Phaser.Scale.NONE,
+    autoCenter: Phaser.Scale.NO_CENTER
+  }
+};
+
+new Phaser.Game(config);
+
+function parseInput(){
+  return document.getElementById("input").value
+    .split("\n")
+    .map(l=>{
+      const [label,w]=l.split("|").map(v=>v.trim());
+      return label?{label,weight:+w||1}:null;
+    }).filter(Boolean);
+}
+
+function weightedPick(items){
+  const total=items.reduce((s,i)=>s+i.weight,0);
+  let r=Math.random()*total;
+  for(let i=0;i<items.length;i++){
+    if((r-=items[i].weight)<=0) return i;
+  }
+  return 0;
+}
+
+function create(){
+  sceneRef=this;
+
+  // Tick sound created ONLY after user gesture
+  sceneRef.input.once("pointerdown",()=>{
+    try{
+      tickSound=sceneRef.sound.add("tick",{volume:.3});
+    }catch{}
+  });
+
+  sceneRef.load.audio("tick","https://assets.codepen.io/3/tick.mp3");
+  sceneRef.load.start();
+
+  buildWheel(parseInput());
+}
+
+function buildWheel(data){
+  if(wheel) wheel.destroy();
+
+  segments=data;
+  // Stick the wheel to the top by setting cy to half the wheel's radius + a small margin
+  const cx=350, cy=310, r=310;
+  sliceAngle=(Math.PI*2)/segments.length;
+
+  wheel=sceneRef.add.container(cx,cy)
+    .setInteractive(new Phaser.Geom.Circle(0,0,r),Phaser.Geom.Circle.Contains);
+
+  const g=sceneRef.add.graphics();
+  wheel.add(g);
+
+  let a=0;
+  segments.forEach((s,i)=>{
+    g.fillStyle(Phaser.Display.Color.HSVToRGB(i/segments.length,.7,.9).color,1);
+    g.slice(0,0,r,a,a+sliceAngle);
+    g.fillPath();
+
+    const m=a+sliceAngle/2;
+    wheel.add(sceneRef.add.text(
+      Math.cos(m)*r*.65,
+      Math.sin(m)*r*.65,
+      s.label,
+      {fontSize:"18px",fontStyle:"bold",color:"#fff",align:"center",wordWrap:{width:180}}
+    ).setOrigin(.5));
+
+    a+=sliceAngle;
+  });
+
+  // Pointer
+  const pointer=sceneRef.add.triangle(cx,cy-r-16,0,0,30,0,15,36,0x222222)
+    .setOrigin(.5);
+
+  // Tick detection
+  sceneRef.events.on("update",()=>{
+    if(!spinning) return;
+    const idx=Math.floor(((wheel.rotation%(Math.PI*2)+Math.PI*2)%(Math.PI*2))/sliceAngle);
+    if(idx!==lastTickIndex){
+      lastTickIndex=idx;
+      pointer.setScale(1.2);
+      sceneRef.tweens.add({targets:pointer,scale:1,duration:120});
+      if(tickSound) tickSound.play();
+    }
+  });
+
+  // Drag spin
+  let startX,startRot;
+  wheel.on("pointerdown",p=>{
+    if(spinning) return;
+    startX=p.x;
+    startRot=wheel.rotation;
+  });
+
+  wheel.on("pointermove",p=>{
+    if(!p.isDown||spinning) return;
+    wheel.rotation=startRot+(p.x-startX)/200;
+  });
+
+  wheel.on("pointerup",()=>{
+    if(spinning) return;
+    spinWheel();
+  });
+
+  wheel.on("pointerdown",()=>!spinning&&spinWheel());
+}
+
+function spinWheel(){
+  if(spinning) return;
+  spinning=true;
+  lastTickIndex=null;
+
+  const idx=weightedPick(segments);
+  const spins=Phaser.Math.Between(4,6);
+  const target=spins*Math.PI*2+(segments.length-idx)*sliceAngle-sliceAngle/2;
+
+  sceneRef.tweens.add({
+    targets:wheel,
+    rotation:target,
+    duration:4200,
+    ease:"Cubic.easeOut",
+    onComplete:()=>{
+      spinning=false;
+      document.getElementById("result").textContent="Result: "+segments[idx].label;
+    }
+  });
+}
+
+function updateWheel(){
+  buildWheel(parseInput());
+  document.getElementById("result").textContent="Spin the wheel!";
+}
+</script>
+
+</body>
+</html>
